@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+README.md
+CLAUDE.md
+documentation
+logs
+*.log
+.env
+.env.*
+Dockerfile
+docker-compose.yml
+ecosystem.config.js

@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tank Battle 2D - Lobby</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #1a1a2e;
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: #4CAF50;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .panel {
+            background: rgba(0, 0, 0, 0.4);
+            border: 2px solid #4CAF50;
+            border-radius: 10px;
+            padding: 20px;
+        }
+
+        .panel h2 {
+            color: #4CAF50;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+
+        /* Game List */
+        #game-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .game-item {
+            background: rgba(76, 175, 80, 0.1);
+            border: 1px solid #333;
+            border-radius: 5px;
+            padding: 12px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .game-item:hover {
+            background: rgba(76, 175, 80, 0.2);
+        }
+
+        .game-info {
+            flex: 1;
+        }
+
+        .game-name {
+            font-weight: bold;
+            color: #fff;
+            font-size: 1.1em;
+        }
+
+        .game-details {
+            color: #888;
+            font-size: 0.85em;
+            margin-top: 4px;
+        }
+
+        .game-map {
+            color: #4CAF50;
+        }
+
+        .player-count {
+            background: #4CAF50;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .no-games {
+            color: #666;
+            text-align: center;
+            padding: 30px;
+            font-style: italic;
+        }
+
+        /* Create Game Form */
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #aaa;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #333;
+            border-radius: 5px;
+            background: #16213e;
+            color: #fff;
+            font-size: 1em;
+        }
+
+        .form-group input[type="range"] {
+            padding: 5px 0;
+            cursor: pointer;
+        }
+
+        #bot-count-display {
+            display: inline-block;
+            margin-left: 10px;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        /* Map Selection */
+        .map-options {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .map-option {
+            background: #16213e;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .map-option:hover {
+            border-color: #4CAF50;
+        }
+
+        .map-option.selected {
+            border-color: #4CAF50;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .map-option input {
+            display: none;
+        }
+
+        .map-name {
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 5px;
+        }
+
+        .map-desc {
+            font-size: 0.8em;
+            color: #888;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #4CAF50;
+            color: #000;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            background: #5CBF60;
+            transform: translateY(-2px);
+        }
+
+        .btn-join {
+            background: #2196F3;
+            color: #fff;
+            padding: 8px 16px;
+        }
+
+        .btn-join:hover {
+            background: #42A5F5;
+        }
+
+        .btn-join:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .game-item.full {
+            opacity: 0.7;
+        }
+
+        /* Connection Status */
+        #connection-status {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .connected {
+            color: #4CAF50;
+        }
+
+        .disconnected {
+            color: #f44336;
+        }
+
+        /* Responsive */
+        @media (max-width: 700px) {
+            .panels {
+                grid-template-columns: 1fr;
+            }
+
+            .map-options {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tank Battle 2D</h1>
+
+        <div id="connection-status" class="disconnected">Connecting to server...</div>
+
+        <div class="panels">
+            <!-- Game List Panel -->
+            <div class="panel">
+                <h2>Active Games</h2>
+                <div id="game-list">
+                    <div class="no-games">No games available. Create one!</div>
+                </div>
+            </div>
+
+            <!-- Create Game Panel -->
+            <div class="panel">
+                <h2>Create New Game</h2>
+                <form id="create-game-form">
+                    <div class="form-group">
+                        <label for="game-name">Game Name</label>
+                        <input type="text" id="game-name" placeholder="Enter game name..." maxlength="20" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Select Map</label>
+                        <div class="map-options">
+                            <label class="map-option selected">
+                                <input type="radio" name="map" value="warehouse" checked>
+                                <div class="map-name">Warehouse</div>
+                                <div class="map-desc">Industrial corridors with tight corners</div>
+                            </label>
+                            <label class="map-option">
+                                <input type="radio" name="map" value="island">
+                                <div class="map-name">Island</div>
+                                <div class="map-desc">Water surrounds a central arena</div>
+                            </label>
+                            <label class="map-option">
+                                <input type="radio" name="map" value="battlefield">
+                                <div class="map-name">Battlefield</div>
+                                <div class="map-desc">Large open map with scattered cover</div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="bot-count">Bots (0-3)</label>
+                        <input type="range" id="bot-count" min="0" max="3" value="0">
+                        <span id="bot-count-display">0 bots</span>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Create Game</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let games = {};
+
+        // Connection status
+        socket.on('connect', () => {
+            document.getElementById('connection-status').textContent = 'Connected to server';
+            document.getElementById('connection-status').className = 'connected';
+            socket.emit('getLobby');
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('connection-status').textContent = 'Disconnected from server';
+            document.getElementById('connection-status').className = 'disconnected';
+        });
+
+        // Receive game list
+        socket.on('lobbyUpdate', (gameList) => {
+            games = gameList;
+            renderGameList();
+        });
+
+        // Render game list
+        function renderGameList() {
+            const container = document.getElementById('game-list');
+            const gameArray = Object.values(games);
+
+            if (gameArray.length === 0) {
+                container.innerHTML = '<div class="no-games">No games available. Create one!</div>';
+                return;
+            }
+
+            container.innerHTML = gameArray.map(game => {
+                const isFull = game.playerCount >= 4;
+                const botInfo = game.botCount > 0 ? ` + ${game.botCount} bot${game.botCount > 1 ? 's' : ''}` : '';
+                return `
+                <div class="game-item${isFull ? ' full' : ''}">
+                    <div class="game-info">
+                        <div class="game-name">${escapeHtml(game.name)}</div>
+                        <div class="game-details">
+                            Map: <span class="game-map">${escapeHtml(game.mapName)}</span>
+                        </div>
+                    </div>
+                    <span class="player-count">${game.playerCount}/4${botInfo}</span>
+                    <button class="btn btn-join" onclick="joinGame('${game.id}')" ${isFull ? 'disabled' : ''}>${isFull ? 'Full' : 'Join'}</button>
+                </div>
+            `;
+            }).join('');
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Map selection
+        document.querySelectorAll('.map-option').forEach(option => {
+            option.addEventListener('click', () => {
+                document.querySelectorAll('.map-option').forEach(o => o.classList.remove('selected'));
+                option.classList.add('selected');
+            });
+        });
+
+        // Bot count slider
+        const botSlider = document.getElementById('bot-count');
+        const botDisplay = document.getElementById('bot-count-display');
+        botSlider.addEventListener('input', () => {
+            const count = botSlider.value;
+            botDisplay.textContent = count === '1' ? '1 bot' : `${count} bots`;
+        });
+
+        // Create game
+        document.getElementById('create-game-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('game-name').value.trim();
+            const map = document.querySelector('input[name="map"]:checked').value;
+            const botCount = parseInt(document.getElementById('bot-count').value);
+
+            if (!name) {
+                alert('Please enter a game name');
+                return;
+            }
+
+            socket.emit('createGame', { name, map, botCount }, (response) => {
+                if (response.success) {
+                    window.location.href = `/game.html?room=${response.roomId}`;
+                } else {
+                    alert(response.error || 'Failed to create game');
+                }
+            });
+        });
+
+        // Join game
+        function joinGame(roomId) {
+            window.location.href = `/game.html?room=${roomId}`;
+        }
+    </script>
+</body>
+</html>
