@@ -114,6 +114,9 @@ function bulletPathCollidesWithWall(oldX, oldY, newX, newY, obstacles) {
 function createBot(room, botIndex) {
     const botId = generateBotId();
     const spawn = getRandomSpawn(room.mapId);
+    // Random tank class for bots
+    const tankClasses = Object.keys(CONFIG.TANK_CLASSES);
+    const randomClass = tankClasses[Math.floor(Math.random() * tankClasses.length)];
     const bot = {
         id: botId,
         name: BOT_NAMES[botIndex % BOT_NAMES.length],
@@ -124,6 +127,7 @@ function createBot(room, botIndex) {
         score: 0,
         health: CONFIG.STARTING_HEALTH,
         isBot: true,
+        tankClass: randomClass,
         // Bot AI state
         targetId: null,
         lastShot: 0,
@@ -195,16 +199,29 @@ function updateBot(bot, room) {
     if (nearestEnemy) {
         bot.angle = Math.atan2(nearestEnemy.y - bot.y, nearestEnemy.x - bot.x);
 
+        // Get class-specific stats for bot
+        const botClass = bot.tankClass || 'speedo';
+        const classConfig = CONFIG.TANK_CLASSES[botClass] || CONFIG.TANK_CLASSES.speedo;
+
         // Shoot if enemy in range and cooldown passed
-        if (nearestDist < 350 && now - bot.lastShot > CONFIG.SHOOT_COOLDOWN + 200) {
+        if (nearestDist < 350 && now - bot.lastShot > classConfig.shootCooldown + 200) {
             bot.lastShot = now;
+
+            // Apply bullet spread for gatling class
+            let bulletAngle = bot.angle;
+            if (classConfig.bulletSpread > 0) {
+                const spread = (Math.random() * 2 - 1) * classConfig.bulletSpread * (Math.PI / 180);
+                bulletAngle += spread;
+            }
 
             const bullet = {
                 id: now + '-' + bot.id,
                 ownerId: bot.id,
                 x: bot.x + Math.cos(bot.angle) * CONFIG.BARREL_LENGTH,
                 y: bot.y + Math.sin(bot.angle) * CONFIG.BARREL_LENGTH,
-                angle: bot.angle,
+                angle: bulletAngle,
+                speed: classConfig.bulletSpeed,
+                damage: classConfig.bulletDamage,
                 createdAt: now
             };
             room.bullets.push(bullet);
@@ -262,6 +279,56 @@ function checkAndDeleteRoom(roomId) {
     }
 }
 
+// Check if game should start (enough players)
+function checkGameStart(room) {
+    if (room.gameState !== 'waiting') return;
+
+    const totalPlayers = Object.keys(room.players).length;
+    if (totalPlayers >= CONFIG.MIN_PLAYERS_TO_START) {
+        room.gameState = 'playing';
+        io.to(room.id).emit('gameStarted');
+        console.log(`Game started in room ${room.id} with ${totalPlayers} players`);
+    }
+}
+
+// Check for winner
+function checkWinCondition(room, scoringPlayerId) {
+    if (room.gameState !== 'playing') return;
+
+    const player = room.players[scoringPlayerId];
+    if (!player) return;
+
+    if (player.score >= CONFIG.WIN_SCORE) {
+        room.gameState = 'ended';
+
+        // Prepare scores data
+        const scores = {};
+        for (const id in room.players) {
+            const p = room.players[id];
+            scores[id] = {
+                name: p.isBot ? p.name : `Player ${id.substr(0, 4)}`,
+                score: p.score
+            };
+        }
+
+        const winnerName = player.isBot ? player.name : `Player ${scoringPlayerId.substr(0, 4)}`;
+
+        io.to(room.id).emit('gameWon', {
+            winnerId: scoringPlayerId,
+            winnerName: winnerName,
+            scores: scores
+        });
+
+        console.log(`Game won in room ${room.id} by ${winnerName} with ${player.score} points`);
+    }
+}
+
+// Get player name
+function getPlayerName(player) {
+    if (player.isBot) return player.name;
+    return `Player ${player.id.substr(0, 4)}`;
+}
+
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
@@ -294,7 +361,8 @@ io.on('connection', (socket) => {
             mapId: map,
             players: {},
             bullets: [],
-            bots: []
+            bots: [],
+            gameState: 'waiting' // 'waiting', 'playing', 'ended'
         };
 
         // Add bots
@@ -309,7 +377,11 @@ io.on('connection', (socket) => {
     });
 
     // Join a game room
-    socket.on('joinRoom', (roomId, callback) => {
+    socket.on('joinRoom', (data, callback) => {
+        // Support both old format (just roomId) and new format ({roomId, tankClass})
+        const roomId = typeof data === 'string' ? data : data.roomId;
+        const tankClass = (typeof data === 'object' && data.tankClass) ? data.tankClass : 'speedo';
+
         const room = rooms[roomId];
 
         if (!room) {
@@ -320,6 +392,9 @@ io.on('connection', (socket) => {
         if (getHumanPlayerCount(room) >= CONFIG.MAX_PLAYERS) {
             return callback({ success: false, error: 'Room is full' });
         }
+
+        // Validate tank class
+        const validClass = CONFIG.TANK_CLASSES[tankClass] ? tankClass : 'speedo';
 
         // Leave lobby
         socket.leave('lobby');
@@ -333,7 +408,7 @@ io.on('connection', (socket) => {
         const mapWidth = map?.width || 800;
         const mapHeight = map?.height || 600;
 
-        // Create player
+        // Create player with tank class
         const spawn = getRandomSpawn(room.mapId);
         room.players[socket.id] = {
             id: socket.id,
@@ -343,7 +418,8 @@ io.on('connection', (socket) => {
             color: getRandomColor(),
             score: 0,
             health: CONFIG.STARTING_HEALTH,
-            isBot: false
+            isBot: false,
+            tankClass: validClass
         };
 
         console.log(`Player ${socket.id} joined room ${roomId}`);
@@ -357,12 +433,16 @@ io.on('connection', (socket) => {
             map: MAPS[room.mapId],
             roomName: room.name,
             gameWidth: mapWidth,
-            gameHeight: mapHeight
+            gameHeight: mapHeight,
+            gameState: room.gameState
         });
 
         // Notify other players
         socket.to(roomId).emit('playerJoined', room.players[socket.id]);
         broadcastLobbyUpdate();
+
+        // Check if game should start
+        checkGameStart(room);
     });
 
     // Leave room
@@ -423,16 +503,61 @@ io.on('connection', (socket) => {
         const room = rooms[socket.roomId];
         if (!room) return;
 
-        const bullet = {
-            id: Date.now() + '-' + socket.id,
-            ownerId: socket.id,
-            x: data.x,
-            y: data.y,
-            angle: data.angle,
-            createdAt: Date.now()
-        };
-        room.bullets.push(bullet);
-        io.to(socket.roomId).emit('bulletFired', bullet);
+        // Don't allow shooting if game isn't playing
+        if (room.gameState !== 'playing') return;
+
+        const player = room.players[socket.id];
+        if (!player) return;
+
+        // Get class-specific stats
+        const tankClass = player.tankClass || 'speedo';
+        const classConfig = CONFIG.TANK_CLASSES[tankClass] || CONFIG.TANK_CLASSES.speedo;
+
+        const now = Date.now();
+
+        // Handle shotgun class (multiple bullets)
+        if (tankClass === 'shotgun' && classConfig.bulletCount > 1) {
+            const bulletCount = classConfig.bulletCount;
+            const spreadAngle = (classConfig.spreadAngle || 30) * (Math.PI / 180);
+            const angleStep = spreadAngle / (bulletCount - 1);
+            const startAngle = data.angle - spreadAngle / 2;
+
+            for (let i = 0; i < bulletCount; i++) {
+                const bulletAngle = startAngle + angleStep * i;
+                const bullet = {
+                    id: now + '-' + socket.id + '-' + i,
+                    ownerId: socket.id,
+                    x: data.x,
+                    y: data.y,
+                    angle: bulletAngle,
+                    speed: classConfig.bulletSpeed,
+                    damage: classConfig.bulletDamage,
+                    createdAt: now
+                };
+                room.bullets.push(bullet);
+                io.to(socket.roomId).emit('bulletFired', bullet);
+            }
+        } else {
+            // Standard single bullet (with optional spread for gatling)
+            let bulletAngle = data.angle;
+            if (classConfig.bulletSpread > 0) {
+                const spread = (Math.random() * 2 - 1) * classConfig.bulletSpread * (Math.PI / 180);
+                bulletAngle += spread;
+            }
+
+            const bullet = {
+                id: now + '-' + socket.id,
+                ownerId: socket.id,
+                x: data.x,
+                y: data.y,
+                angle: bulletAngle,
+                speed: classConfig.bulletSpeed,
+                damage: classConfig.bulletDamage,
+                createdAt: now
+            };
+            room.bullets.push(bullet);
+            io.to(socket.roomId).emit('bulletFired', bullet);
+        }
     });
 
     // Handle disconnection
@@ -464,6 +589,9 @@ setInterval(() => {
         const mapHeight = map?.height || 600;
         const obstacles = map?.obstacles || [];
 
+        // Only update game logic when playing
+        if (room.gameState !== 'playing') continue;
+
         // Update bots
         for (const botId of room.bots) {
             const bot = room.players[botId];
@@ -479,8 +607,10 @@ setInterval(() => {
             const oldX = bullet.x;
             const oldY = bullet.y;
 
-            bullet.x += Math.cos(bullet.angle) * CONFIG.BULLET_SPEED;
-            bullet.y += Math.sin(bullet.angle) * CONFIG.BULLET_SPEED;
+            // Use bullet-specific speed (fallback to default for backwards compatibility)
+            const bulletSpeed = bullet.speed || CONFIG.TANK_CLASSES.speedo.bulletSpeed;
+            bullet.x += Math.cos(bullet.angle) * bulletSpeed;
+            bullet.y += Math.sin(bullet.angle) * bulletSpeed;
 
             // Check if bullet path intersects a wall
             if (bulletPathCollidesWithWall(oldX, oldY, bullet.x, bullet.y, obstacles)) {
@@ -508,7 +638,9 @@ setInterval(() => {
                 const distance = Math.sqrt(dx * dx + dy * dy);
 
                 if (distance < CONFIG.TANK_SIZE / 2) {
-                    player.health -= CONFIG.BULLET_DAMAGE;
+                    // Use bullet-specific damage
+                    const bulletDamage = bullet.damage || CONFIG.TANK_CLASSES.speedo.bulletDamage;
+                    player.health -= bulletDamage;
                     room.bullets.splice(i, 1);
                     io.to(roomId).emit('bulletRemoved', bullet.id);
                     io.to(roomId).emit('playerHit', { playerId, health: player.health });
@@ -520,14 +652,19 @@ setInterval(() => {
                                 playerId: bullet.ownerId,
                                 score: room.players[bullet.ownerId].score
                             });
+
+                            // Check for winner
+                            checkWinCondition(room, bullet.ownerId);
                         }
 
-                        // Respawn player
-                        const spawn = getRandomSpawn(room.mapId);
-                        player.x = spawn.x;
-                        player.y = spawn.y;
-                        player.health = CONFIG.STARTING_HEALTH;
-                        io.to(roomId).emit('playerRespawned', player);
+                        // Respawn player (only if game is still playing)
+                        if (room.gameState === 'playing') {
+                            const spawn = getRandomSpawn(room.mapId);
+                            player.x = spawn.x;
+                            player.y = spawn.y;
+                            player.health = CONFIG.STARTING_HEALTH;
+                            io.to(roomId).emit('playerRespawned', player);
+                        }
                     }
                     break;
                 }

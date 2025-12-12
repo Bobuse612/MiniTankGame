@@ -73,12 +73,34 @@ sudo apt install certbot python3-certbot-nginx
 sudo certbot --nginx -d yourdomain.com
 ```
 
+## Play with Friends (ngrok)
+
+Share your game with friends over the internet using ngrok:
+
+```bash
+# Terminal 1: Start the game server
+npm start
+
+# Terminal 2: Start ngrok tunnel
+npx ngrok http 3000
+```
+
+Ngrok will display a public URL like `https://abc123.ngrok-free.app` - share this with your friends!
+
 ## Game Features
 
 - **Multiplayer**: Up to 4 players per room
 - **Bots**: Add AI opponents when creating a game
 - **Maps**: Multiple maps with different sizes and obstacles
 - **Obstacles**: Walls (block everything) and Water (block players only)
+
+## Tank Classes
+
+| Class | Damage | Fire Rate | Special |
+|-------|--------|-----------|---------|
+| Normal | 25 | Medium | Dash (A/Q key) |
+| Sniper | 50 | Slow | Fast bullets |
+| Gatling | 15 | Fast | Bullet spread |
 
 ## Controls
 
@@ -87,13 +109,14 @@ sudo certbot --nginx -d yourdomain.com
 | Z/Q/S/D (AZERTY) | Move |
 | W/A/S/D (QWERTY) | Move |
 | Arrow Keys | Shoot (8 directions) |
+| A (AZERTY) / Q (QWERTY) | Dash (Normal class only) |
 
 ## Available Maps
 
 | Map | Size | Description |
 |-----|------|-------------|
-| Warehouse | 800x600 | Tight corridors and corners |
-| Island | 800x600 | Water borders with central arena |
+| Warehouse | 1000x750 | Tight corridors and corners |
+| Island | 1000x750 | Water borders with central arena |
 | Battlefield | 1200x800 | Large open map with scattered cover |
 
 ## Project Structure

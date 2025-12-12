@@ -2,7 +2,6 @@
 const TANK_SIZE = CONFIG.TANK_SIZE;
 const BARREL_LENGTH = CONFIG.BARREL_LENGTH;
 const BULLET_SIZE = CONFIG.BULLET_SIZE;
-const BULLET_SPEED = CONFIG.BULLET_SPEED;
 
 // Movement physics (from CONFIG)
 const ACCELERATION = CONFIG.ACCELERATION;
@@ -11,6 +10,16 @@ const MAX_SPEED = CONFIG.MAX_SPEED;
 
 // Keyboard layout setting
 let keyboardLayout = CONFIG.DEFAULT_KEYBOARD;
+
+// Tank class selection
+let selectedClass = 'speedo';
+let myTankClass = 'speedo';
+
+// Speed boost ability state (for speedo class)
+let isBoosting = false;
+let boostEndTime = 0;
+let boostCooldownEnd = 0;
+let spaceKeyDown = false;
 
 // Game state
 let canvas, ctx;
@@ -22,6 +31,8 @@ let gameWidth = 800;
 let gameHeight = 600;
 let currentMap = null;
 let roomId = null;
+let gameState = 'waiting'; // 'waiting', 'playing', 'ended'
+let gameLoopStarted = false;
 
 // Player velocity
 let velocityX = 0;
@@ -88,44 +99,100 @@ function init() {
         return;
     }
 
+    // Setup class selection UI
+    setupClassSelection();
+
     // Connect to server
     socket = io();
 
-    setupSocketEvents();
     setupInputEvents();
     updateKeyboardDisplay();
+}
+
+// Setup class selection
+function setupClassSelection() {
+    const overlay = document.getElementById('class-select-overlay');
+    const joinBtn = document.getElementById('join-game-btn');
+    const classCards = document.querySelectorAll('.class-card');
+
+    // Class card selection
+    classCards.forEach(card => {
+        card.addEventListener('click', () => {
+            classCards.forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
+            selectedClass = card.dataset.class;
+        });
+    });
+
+    // Join game button
+    joinBtn.addEventListener('click', () => {
+        myTankClass = selectedClass;
+        overlay.style.display = 'none';
+
+        // Show boost UI only for speedo class
+        if (myTankClass === 'speedo') {
+            document.getElementById('boost-cooldown').style.display = 'block';
+            document.getElementById('boost-text').style.display = 'inline';
+        }
+
+        // Setup socket events and join room
+        setupSocketEvents();
+
+        // If already connected, join immediately
+        if (socket.connected) {
+            joinRoom();
+        }
+    });
+}
+
+// Join the room
+function joinRoom() {
+    socket.emit('joinRoom', { roomId, tankClass: myTankClass }, (response) => {
+        if (response.success) {
+            myId = response.playerId;
+            players = response.players;
+            currentMap = response.map;
+            gameWidth = response.gameWidth;
+            gameHeight = response.gameHeight;
+            gameState = response.gameState || 'waiting';
+
+            // Resize canvas to match map dimensions
+            canvas.width = gameWidth;
+            canvas.height = gameHeight;
+
+            // Update room name display
+            document.getElementById('room-name').textContent = response.roomName;
+
+            // Update min players display
+            const minPlayersDisplay = document.getElementById('min-players-display');
+            if (minPlayersDisplay) {
+                minPlayersDisplay.textContent = CONFIG.MIN_PLAYERS_TO_START;
+            }
+
+            updateUI();
+            updateScoreboard();
+            updateWaitScreen();
+
+            // Start game loop if not already started
+            if (!gameLoopStarted) {
+                gameLoopStarted = true;
+                requestAnimationFrame(gameLoop);
+            }
+        } else {
+            alert(response.error || 'Failed to join room');
+            window.location.href = '/';
+        }
+    });
 }
 
 // Setup socket event handlers
 function setupSocketEvents() {
     socket.on('connect', () => {
         updateConnectionStatus(true);
-        // Join the room
-        socket.emit('joinRoom', roomId, (response) => {
-            if (response.success) {
-                myId = response.playerId;
-                players = response.players;
-                currentMap = response.map;
-                gameWidth = response.gameWidth;
-                gameHeight = response.gameHeight;
-
-                // Resize canvas to match map dimensions
-                canvas.width = gameWidth;
-                canvas.height = gameHeight;
-
-                // Update room name display
-                document.getElementById('room-name').textContent = response.roomName;
-
-                updateUI();
-                updateScoreboard();
-
-                // Start game loop
-                requestAnimationFrame(gameLoop);
-            } else {
-                alert(response.error || 'Failed to join room');
-                window.location.href = '/';
-            }
-        });
+        // Join room on connect (for reconnects)
+        if (!myId) {
+            joinRoom();
+        }
     });
 
     socket.on('disconnect', () => {
@@ -135,11 +202,34 @@ function setupSocketEvents() {
     socket.on('playerJoined', (player) => {
         players[player.id] = player;
         updateScoreboard();
+        updateWaitScreen();
     });
 
     socket.on('playerLeft', (playerId) => {
         delete players[playerId];
         updateScoreboard();
+        updateWaitScreen();
+    });
+
+    socket.on('gameStarted', () => {
+        gameState = 'playing';
+        updateWaitScreen();
+    });
+
+    socket.on('gameWon', (data) => {
+        gameState = 'ended';
+        showWinnerScreen(data.winnerId, data.winnerName, data.scores);
+    });
+
+    socket.on('gameReset', () => {
+        gameState = 'waiting';
+        // Reset all scores locally
+        for (const id in players) {
+            players[id].score = 0;
+        }
+        updateScoreboard();
+        updateWaitScreen();
+        hideWinnerScreen();
     });
 
     socket.on('playerMoved', (data) => {
@@ -224,6 +314,11 @@ function handleKeyChange(key, isPressed) {
         }
     }
 
+    // Space key for speed boost (Speedo class)
+    if (key === ' ') {
+        spaceKeyDown = isPressed;
+    }
+
     // Arrow keys for shooting
     switch (key) {
         case 'ArrowUp': shootKeys.up = isPressed; break;
@@ -231,6 +326,13 @@ function handleKeyChange(key, isPressed) {
         case 'ArrowLeft': shootKeys.left = isPressed; break;
         case 'ArrowRight': shootKeys.right = isPressed; break;
     }
+}
+
+// Get current speed multiplier based on boost state
+function getSpeedMultiplier() {
+    if (myTankClass !== 'speedo') return 1;
+    if (!isBoosting) return 1;
+    return CONFIG.TANK_CLASSES.speedo.boostSpeedMultiplier;
 }
 
 // Get shooting angle from arrow keys (8 directions)
@@ -257,11 +359,15 @@ function tryShoot() {
 
 // Shooting
 let lastShot = 0;
-const SHOOT_COOLDOWN = CONFIG.SHOOT_COOLDOWN;
+
+function getShootCooldown() {
+    const classConfig = CONFIG.TANK_CLASSES[myTankClass] || CONFIG.TANK_CLASSES.speedo;
+    return classConfig.shootCooldown;
+}
 
 function shoot(angle) {
     const now = Date.now();
-    if (now - lastShot < SHOOT_COOLDOWN) return;
+    if (now - lastShot < getShootCooldown()) return;
     if (!myId || !players[myId]) return;
 
     lastShot = now;
@@ -312,11 +418,15 @@ function updatePlayer() {
     velocityX *= FRICTION;
     velocityY *= FRICTION;
 
+    // Get speed multiplier (for Speedo boost)
+    const speedMultiplier = getSpeedMultiplier();
+    const currentMaxSpeed = MAX_SPEED * speedMultiplier;
+
     // Clamp velocity to max speed
     const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
-    if (speed > MAX_SPEED) {
-        velocityX = (velocityX / speed) * MAX_SPEED;
-        velocityY = (velocityY / speed) * MAX_SPEED;
+    if (speed > currentMaxSpeed) {
+        velocityX = (velocityX / speed) * currentMaxSpeed;
+        velocityY = (velocityY / speed) * currentMaxSpeed;
     }
 
     // Stop if velocity is very small
@@ -415,8 +525,10 @@ function updateBullets() {
         const oldX = bullet.x;
         const oldY = bullet.y;
 
-        const newX = bullet.x + Math.cos(bullet.angle) * BULLET_SPEED;
-        const newY = bullet.y + Math.sin(bullet.angle) * BULLET_SPEED;
+        // Use bullet-specific speed (fallback to default)
+        const bulletSpeed = bullet.speed || CONFIG.TANK_CLASSES.speedo.bulletSpeed;
+        const newX = bullet.x + Math.cos(bullet.angle) * bulletSpeed;
+        const newY = bullet.y + Math.sin(bullet.angle) * bulletSpeed;
 
         // Check if bullet path hits a wall (client-side prediction)
         if (bulletHitsWall(oldX, oldY, newX, newY)) {
@@ -601,6 +713,12 @@ function updateUI() {
 
 function updateScoreboard() {
     const playerList = document.getElementById('player-list');
+    const winScoreEl = document.getElementById('win-score');
+
+    if (winScoreEl) {
+        winScoreEl.textContent = CONFIG.WIN_SCORE;
+    }
+
     playerList.innerHTML = '';
 
     const sortedPlayers = Object.values(players).sort((a, b) => b.score - a.score);
@@ -610,7 +728,7 @@ function updateScoreboard() {
         div.className = 'player-score';
         div.style.color = player.color;
 
-        const name = player.id === myId ? 'You' : `Player ${player.id.substr(0, 4)}`;
+        const name = player.id === myId ? 'You' : (player.isBot ? player.name : `Player ${player.id.substr(0, 4)}`);
         div.textContent = `${name}: ${player.score}`;
 
         playerList.appendChild(div);
@@ -630,11 +748,146 @@ function updateConnectionStatus(connected) {
 
 // Game loop
 function gameLoop() {
-    updatePlayer();
-    updateBullets();
-    tryShoot();
+    // Only update game logic when playing
+    if (gameState === 'playing') {
+        updateBoostState();
+        updatePlayer();
+        updateBullets();
+        tryShoot();
+        updateBoostUI();
+    }
+
+    // Always render
     render();
     requestAnimationFrame(gameLoop);
+}
+
+// Update boost state based on space key and cooldown
+function updateBoostState() {
+    if (myTankClass !== 'speedo') return;
+
+    const now = Date.now();
+    const classConfig = CONFIG.TANK_CLASSES.speedo;
+
+    // Check if we can start boosting
+    if (spaceKeyDown && !isBoosting && now >= boostCooldownEnd) {
+        isBoosting = true;
+        boostEndTime = now + classConfig.boostDuration;
+    }
+
+    // Check if boost should end (duration over or key released)
+    if (isBoosting) {
+        if (!spaceKeyDown || now >= boostEndTime) {
+            isBoosting = false;
+            boostCooldownEnd = now + classConfig.boostCooldown;
+        }
+    }
+}
+
+// Update boost cooldown UI
+function updateBoostUI() {
+    if (myTankClass !== 'speedo') return;
+
+    const boostFill = document.getElementById('boost-fill');
+    const boostCooldownDiv = document.getElementById('boost-cooldown');
+    if (!boostFill) return;
+
+    const classConfig = CONFIG.TANK_CLASSES.speedo;
+    const now = Date.now();
+
+    if (isBoosting) {
+        // Show remaining boost duration
+        const remaining = boostEndTime - now;
+        const percent = (remaining / classConfig.boostDuration) * 100;
+        boostFill.style.width = percent + '%';
+        boostFill.style.background = '#00BFFF'; // Blue when boosting
+        if (boostCooldownDiv) boostCooldownDiv.classList.add('boosting');
+    } else {
+        // Show cooldown progress
+        const cooldownRemaining = boostCooldownEnd - now;
+        if (cooldownRemaining > 0) {
+            const percent = 100 - (cooldownRemaining / classConfig.boostCooldown) * 100;
+            boostFill.style.width = percent + '%';
+            boostFill.style.background = '#FFD700'; // Yellow when on cooldown
+        } else {
+            boostFill.style.width = '100%';
+            boostFill.style.background = '#4CAF50'; // Green when ready
+        }
+        if (boostCooldownDiv) boostCooldownDiv.classList.remove('boosting');
+    }
+}
+
+// Wait screen functions
+function updateWaitScreen() {
+    const waitOverlay = document.getElementById('wait-overlay');
+    const playerCountDisplay = document.getElementById('player-count-display');
+    const waitPlayersDiv = document.getElementById('wait-players');
+
+    const playerCount = Object.keys(players).length;
+    const minPlayers = CONFIG.MIN_PLAYERS_TO_START;
+
+    if (gameState === 'waiting' && playerCount < minPlayers) {
+        waitOverlay.style.display = 'flex';
+
+        // Update player count
+        if (playerCountDisplay) {
+            playerCountDisplay.textContent = playerCount;
+        }
+
+        // Update player list
+        if (waitPlayersDiv) {
+            waitPlayersDiv.innerHTML = '';
+            for (const id in players) {
+                const player = players[id];
+                const div = document.createElement('div');
+                div.className = 'wait-player';
+                div.style.color = player.color;
+                const name = id === myId ? 'You' : (player.isBot ? player.name : `Player ${id.substr(0, 4)}`);
+                div.textContent = name;
+                waitPlayersDiv.appendChild(div);
+            }
+        }
+    } else {
+        waitOverlay.style.display = 'none';
+    }
+}
+
+// Winner screen functions
+function showWinnerScreen(winnerId, winnerName, scores) {
+    const winnerOverlay = document.getElementById('winner-overlay');
+    const winnerNameDiv = document.getElementById('winner-name');
+    const finalScoreList = document.getElementById('final-score-list');
+
+    winnerOverlay.style.display = 'flex';
+
+    // Show winner name
+    const isMe = winnerId === myId;
+    winnerNameDiv.textContent = isMe ? 'You win!' : `${winnerName} wins!`;
+    winnerNameDiv.style.color = isMe ? '#FFD700' : '#4CAF50';
+
+    // Show final scores
+    if (finalScoreList && scores) {
+        finalScoreList.innerHTML = '';
+        const sortedScores = Object.entries(scores).sort((a, b) => b[1].score - a[1].score);
+
+        for (const [id, data] of sortedScores) {
+            const div = document.createElement('div');
+            div.className = 'final-score-item' + (id === winnerId ? ' winner' : '');
+            const name = id === myId ? 'You' : data.name;
+            div.textContent = `${name}: ${data.score}`;
+            finalScoreList.appendChild(div);
+        }
+    }
+}
+
+function hideWinnerScreen() {
+    const winnerOverlay = document.getElementById('winner-overlay');
+    winnerOverlay.style.display = 'none';
+}
+
+function playAgain() {
+    // Go back to lobby
+    window.location.href = '/';
 }
 
 // Start game when page loads
